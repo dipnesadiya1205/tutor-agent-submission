@@ -29,6 +29,8 @@ from pipecat.services.openai.stt import OpenAIRealtimeSTTService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
+from presentation import PresentationState, Slide
+
 load_dotenv(override=True)
 
 
@@ -93,12 +95,15 @@ SLIDE_SYSTEM_MESSAGES: List[str] = [
     ),
 ]
 
+SLIDES: List[Slide] = [Slide(*text.split("\n\n", 1)) for text in SLIDE_SYSTEM_MESSAGES]
+
+
 class PresentationObserver0(BaseObserver):
     """Observer that advances slides after 5 seconds of bot silence."""
 
-    def __init__(self):
+    def __init__(self, state: PresentationState):
         super().__init__()
-        self.current_slide = -1
+        self.state = state
         self.task: PipelineTask | None = None
         self._is_bot_speaking = False
         self._silence_timer: asyncio.TimerHandle | None = None
@@ -157,17 +162,15 @@ class PresentationObserver0(BaseObserver):
 
     async def continue_current_slide(self):
         """Instruct the AI to stay on the current slide and continue where it left off."""
-        if self.current_slide < 0 or self.current_slide >= len(SLIDE_SYSTEM_MESSAGES):
+        slide = self.state.current
+        if slide is None:
             return
         self._user_spoke_since_last_slide = False
-        slide_num = self.current_slide + 1
-        slide_content = SLIDE_SYSTEM_MESSAGES[self.current_slide]
-        slide_title = slide_content.split("\n\n")[0].strip() if slide_content else f"Slide {slide_num}"
         new_messages = [
             {
                 "role": "system",
                 "content": (
-                    f"You are still on {slide_title}. Continue presenting this slide where you left off. "
+                    f"You are still on {slide.title}. Continue presenting this slide where you left off. "
                     "Do not repeat what you already said; pick up from there."
                 ),
             }
@@ -175,20 +178,20 @@ class PresentationObserver0(BaseObserver):
         await self.task.queue_frames([LLMMessagesAppendFrame(messages=new_messages, run_llm=True)])
 
     async def go_to_next_slide(self):
-        self.current_slide += 1
         self._user_spoke_since_last_slide = False
-        new_messages = []
-        if self.current_slide < len(SLIDE_SYSTEM_MESSAGES) - 1:
-            print(f"Adding slide {self.current_slide} to context")
-            new_messages.append({"role": "system", "content": SLIDE_SYSTEM_MESSAGES[self.current_slide]})
-        elif self.current_slide == len(SLIDE_SYSTEM_MESSAGES) - 1:
-            print(f"Adding goodbye slide to context")
-            new_messages.append({"role": "system", "content": "Say goodbye and end the presentation."})
+        slide = await self.state.advance()
+        if slide is None:
+            logger.warning("already on the last slide, nothing to advance to")
+            return
 
-        if len(new_messages) > 0:
-            await self.task.queue_frames([LLMMessagesAppendFrame(messages=new_messages, run_llm=True)])
+        if self.state.is_last:
+            content = "Say goodbye and end the presentation."
         else:
-            logger.critical("NO SLIDE TO INSERT")
+            content = slide.prompt
+
+        await self.task.queue_frames(
+            [LLMMessagesAppendFrame(messages=[{"role": "system", "content": content}], run_llm=True)]
+        )
 
 
 async def run_bot(websocket_client):
@@ -250,7 +253,8 @@ async def run_bot(websocket_client):
         ]
     )
 
-    presentation_observer0 = PresentationObserver0()
+    presentation = PresentationState(SLIDES)
+    presentation_observer0 = PresentationObserver0(presentation)
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
