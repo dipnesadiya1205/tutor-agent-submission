@@ -79,6 +79,17 @@ class PresentationState:
             return None
         return await self.go_to(self.index + 1)
 
+    async def enter_qna(self) -> None:
+        if self.mode == Mode.QNA:
+            return
+        self.mode = Mode.QNA
+        logger.info("presentation finished, switching to Q&A")
+        await self._notify()
+
+    @property
+    def in_qna(self) -> bool:
+        return self.mode == Mode.QNA
+
     def snapshot(self) -> dict:
         return {
             "index": self.index,

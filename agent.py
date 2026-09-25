@@ -127,13 +127,19 @@ class PresentationObserver0(BaseObserver):
         )
 
     async def _on_silence_timeout(self):
-        if not self._is_bot_speaking:
-            if self._user_spoke_since_last_slide:
-                logger.info("3 seconds silence after user spoke; staying on slide and instructing AI to continue.")
-                await self.continue_current_slide()
-            else:
-                logger.info("3 seconds of bot silence detected; queuing next slide.")
-                await self.go_to_next_slide()
+        if self._is_bot_speaking:
+            return
+        if self.state.in_qna:
+            # Open conversation now, nothing to auto-advance to.
+            return
+        if self._user_spoke_since_last_slide:
+            logger.info("3 seconds silence after user spoke; staying on slide and instructing AI to continue.")
+            await self.continue_current_slide()
+        elif self.state.has_next:
+            logger.info("3 seconds of bot silence detected; queuing next slide.")
+            await self.go_to_next_slide()
+        else:
+            await self.start_qna()
 
     async def on_push_frame(self, data: FramePushed):
         frame = data.frame
@@ -184,11 +190,19 @@ class PresentationObserver0(BaseObserver):
             logger.warning("already on the last slide, nothing to advance to")
             return
 
-        if self.state.is_last:
-            content = "Say goodbye and end the presentation."
-        else:
-            content = slide.prompt
+        await self.task.queue_frames(
+            [LLMMessagesAppendFrame(messages=[{"role": "system", "content": slide.prompt}], run_llm=True)]
+        )
 
+    async def start_qna(self):
+        await self.state.enter_qna()
+        self._user_spoke_since_last_slide = False
+        content = (
+            "The presentation is over. You are now in an open Q&A session with the students. "
+            "Let them know the slides are finished and invite their questions. "
+            "Keep answers short and conversational, and wait for them to speak rather than lecturing. "
+            "If a student asks to go back to a slide or topic, revisit that slide's material."
+        )
         await self.task.queue_frames(
             [LLMMessagesAppendFrame(messages=[{"role": "system", "content": content}], run_llm=True)]
         )
