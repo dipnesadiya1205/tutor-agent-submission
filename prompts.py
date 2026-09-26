@@ -24,6 +24,11 @@ RESUME_AFTER_PAUSE = (
     "and do not repeat anything already said."
 )
 
+JUMP_TO_SLIDE = (
+    "The class has jumped to {title}. Say a short transition like \"Okay, let's look at this one\" "
+    "and present the slide from the top. If you already covered it earlier, keep it a little shorter this time."
+)
+
 QNA_INTRO = (
     "The presentation is over. You are now in an open Q&A session with the students. "
     "Let them know the slides are finished and invite their questions. "

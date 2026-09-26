@@ -93,6 +93,24 @@ button:disabled {
   font-size: 28px;
 }
 
+.slide-nav {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 20px;
+}
+
+.slide-nav button {
+  padding: 8px 14px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background-color: #fafafa;
+  cursor: pointer;
+}
+
+.slide-nav button:hover:not(:disabled) {
+  background-color: #eee;
+}
+
 .main-content {
   background-color: #fff;
   border-radius: 8px;

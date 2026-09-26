@@ -39,7 +39,10 @@ class WebsocketClientApp {
     private connectBtn: HTMLButtonElement | null = null;
     private disconnectBtn: HTMLButtonElement | null = null;
     private pauseBtn: HTMLButtonElement | null = null;
+    private prevBtn: HTMLButtonElement | null = null;
+    private nextBtn: HTMLButtonElement | null = null;
     private paused = false;
+    private slide: SlideState | null = null;
     private statusSpan: HTMLElement | null = null;
     private debugLog: HTMLElement | null = null;
     private slideTitle: HTMLElement | null = null;
@@ -70,6 +73,8 @@ class WebsocketClientApp {
             'disconnect-btn'
         ) as HTMLButtonElement;
         this.pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement;
+        this.prevBtn = document.getElementById('prev-btn') as HTMLButtonElement;
+        this.nextBtn = document.getElementById('next-btn') as HTMLButtonElement;
         this.statusSpan = document.getElementById('connection-status');
         this.debugLog = document.getElementById('debug-log');
         this.slideTitle = document.getElementById('slide-title');
@@ -94,6 +99,8 @@ class WebsocketClientApp {
     }
 
     private renderSlide(state: SlideState): void {
+        this.slide = state;
+        this.updateNavButtons();
         if (!this.slideTitle || !this.slideCounter || !this.modeBadge) return;
 
         if (state.index < 0) {
@@ -116,6 +123,24 @@ class WebsocketClientApp {
         this.connectBtn?.addEventListener('click', () => this.connect());
         this.disconnectBtn?.addEventListener('click', () => this.disconnect());
         this.pauseBtn?.addEventListener('click', () => this.togglePause());
+        this.prevBtn?.addEventListener('click', () => this.goToSlide((this.slide?.index ?? 0) - 1));
+        this.nextBtn?.addEventListener('click', () => this.goToSlide((this.slide?.index ?? -1) + 1));
+    }
+
+    private goToSlide(index: number): void {
+        if (!this.pcClient || !this.slide) return;
+        if (index < 0 || index >= this.slide.total) return;
+        this.log(`Jumping to slide ${index + 1}`);
+        this.pcClient.sendClientMessage('goto', { index });
+    }
+
+    private updateNavButtons(): void {
+        const connected = !!this.pcClient && !!this.slide;
+        if (this.prevBtn) this.prevBtn.disabled = !connected || (this.slide?.index ?? 0) <= 0;
+        if (this.nextBtn) {
+            const idx = this.slide?.index ?? -1;
+            this.nextBtn.disabled = !connected || idx >= (this.slide?.total ?? 0) - 1;
+        }
     }
 
     private togglePause(): void {
@@ -238,6 +263,8 @@ class WebsocketClientApp {
                         if (this.disconnectBtn) this.disconnectBtn.disabled = true;
                         this.setPaused(false);
                         if (this.pauseBtn) this.pauseBtn.disabled = true;
+                        this.slide = null;
+                        this.updateNavButtons();
                         this.log('Client disconnected');
                     },
                     onBotReady: (data) => {

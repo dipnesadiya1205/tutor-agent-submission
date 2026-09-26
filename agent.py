@@ -34,7 +34,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPI
 
 from playback import MicGate, PlaybackMeter, ResponseProgress, SpeechTracker, snapshot
 from presentation import PresentationState, Slide
-from prompts import QNA_INTRO, RESUME_AFTER_PAUSE, RESUME_SLIDE, SYSTEM_PROMPT
+from prompts import JUMP_TO_SLIDE, QNA_INTRO, RESUME_AFTER_PAUSE, RESUME_SLIDE, SYSTEM_PROMPT
 
 load_dotenv(override=True)
 
@@ -202,6 +202,17 @@ class PresentationObserver0(BaseObserver):
             [LLMMessagesAppendFrame(messages=[{"role": "system", "content": slide.prompt}], run_llm=True)]
         )
 
+    async def jump_to_slide(self, index: int):
+        self._cancel_silence_timer()
+        self._user_spoke_since_last_slide = False
+        slide = await self.state.go_to(index)
+        if slide is None:
+            return
+        content = JUMP_TO_SLIDE.format(title=slide.title) + "\n\n" + slide.prompt
+        await self.task.queue_frames(
+            [LLMMessagesAppendFrame(messages=[{"role": "system", "content": content}], run_llm=True)]
+        )
+
     async def start_qna(self):
         await self.state.enter_qna()
         self._user_spoke_since_last_slide = False
@@ -313,13 +324,15 @@ async def run_bot(websocket_client):
         await rtvi.interrupt_bot()
         await rtvi.send_server_message({"type": "playback", "state": "paused"})
 
-    async def resume():
+    async def resume(replay: bool = True):
         nonlocal paused_speech
         if not presentation_observer0.paused:
             return
         pending, paused_speech = paused_speech, None
         mic_gate.closed = False
         frames = []
+        if not replay:
+            pending = None
         if pending and pending.text:
             frames.append(TTSSpeakFrame(pending.text))
         if pending and not pending.response_complete:
@@ -333,12 +346,24 @@ async def run_bot(websocket_client):
         presentation_observer0.set_paused(False)
         await rtvi.send_server_message({"type": "playback", "state": "playing"})
 
+    async def goto(data):
+        index = data.get("index") if isinstance(data, dict) else None
+        if not isinstance(index, int):
+            logger.warning(f"bad goto payload: {data!r}")
+            return
+        if presentation_observer0.paused:
+            await resume(replay=False)
+        await rtvi.interrupt_bot()
+        await presentation_observer0.jump_to_slide(index)
+
     @rtvi.event_handler("on_client_message")
     async def on_client_message(processor, message):
         if message.type == "pause":
             await pause()
         elif message.type == "resume":
             await resume()
+        elif message.type == "goto":
+            await goto(message.data)
         else:
             logger.debug(f"unhandled client message: {message.type}")
 
