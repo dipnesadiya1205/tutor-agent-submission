@@ -20,6 +20,7 @@ import {
 } from '@pipecat-ai/client-js';
 import { WebSocketTransport } from '@pipecat-ai/websocket-transport';
 import { Transcript } from './transcript';
+import { showToast } from './toast';
 
 type SlideInfo = { index: number; title: string };
 
@@ -33,7 +34,8 @@ type SlideState = {
 type ServerMessage =
     | ({ type: 'slide' } & SlideState)
     | ({ type: 'deck'; slides: SlideInfo[] } & SlideState)
-    | { type: 'playback'; state: 'paused' | 'playing' };
+    | { type: 'playback'; state: 'paused' | 'playing' }
+    | { type: 'error'; message: string };
 
 type Activity = 'idle' | 'listening' | 'thinking' | 'speaking' | 'paused';
 
@@ -197,6 +199,16 @@ class WebsocketClientApp {
             case 'playback':
                 this.log(`Playback: ${msg.state}`);
                 this.setPaused(msg.state === 'paused');
+                break;
+            case 'error':
+                this.log(`Server error: ${msg.message}`);
+                showToast(msg.message, 'error');
+                // Whatever was in flight didn't happen; unlock the controls.
+                this.jumpPending = false;
+                this.slidePanel?.classList.remove('transitioning');
+                if (this.pauseBtn && this.pcClient) this.pauseBtn.disabled = false;
+                this.updateNavButtons();
+                this.updateDeck();
                 break;
         }
     }
@@ -440,8 +452,14 @@ class WebsocketClientApp {
                         this.transcript?.appendBot(data.text);
                     },
                     onServerMessage: (data) => this.handleServerMessage(data as ServerMessage),
-                    onMessageError: (error) => console.error('Message error:', error),
-                    onError: (error) => console.error('Error:', error),
+                    onMessageError: (error) => {
+                        console.error('Message error:', error);
+                        showToast(describeError(error), 'error', 'Message failed');
+                    },
+                    onError: (error) => {
+                        console.error('Error:', error);
+                        showToast(describeError(error), 'error', 'Something went wrong');
+                    },
                 },
             };
             this.pcClient = new PipecatClient(PipecatConfig);
@@ -464,6 +482,7 @@ class WebsocketClientApp {
             this.log(`Error connecting: ${(error as Error).message}`);
             this.updateStatus('Error');
             this.setLoading(false);
+            showToast(connectionHint(error), 'error', "Couldn't connect");
             if (this.connectBtn) {
                 this.connectBtn.disabled = false;
                 this.connectBtn.textContent = 'Retry';
@@ -498,9 +517,36 @@ class WebsocketClientApp {
                 }
             } catch (error) {
                 this.log(`Error disconnecting: ${(error as Error).message}`);
+                showToast(describeError(error), 'warning', 'Disconnect was not clean');
             }
         }
     }
+}
+
+function describeError(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object') {
+        const data = error as { message?: unknown; data?: { message?: unknown } };
+        const message = data.message ?? data.data?.message;
+        if (typeof message === 'string') return message;
+    }
+    return 'An unexpected error occurred.';
+}
+
+function connectionHint(error: unknown): string {
+    const message = describeError(error);
+    const lower = message.toLowerCase();
+    if (lower.includes('permission') || lower.includes('notallowed') || lower.includes('denied')) {
+        return 'Microphone access was blocked. Allow the microphone in your browser and try again.';
+    }
+    if (lower.includes('fetch') || lower.includes('network') || lower.includes('failed to') || lower.includes('econn')) {
+        return 'The backend is not reachable. Make sure the server is running on port 7860.';
+    }
+    if (lower.includes('timeout') || lower.includes('timed out')) {
+        return 'The backend took too long to respond. Check that it started without errors.';
+    }
+    return message;
 }
 
 declare global {

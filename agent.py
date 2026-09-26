@@ -346,10 +346,14 @@ async def run_bot(websocket_client):
         presentation_observer0.set_paused(False)
         await rtvi.send_server_message({"type": "playback", "state": "playing"})
 
+    async def send_error(message: str):
+        await rtvi.send_server_message({"type": "error", "message": message})
+
     async def goto(data):
         index = data.get("index") if isinstance(data, dict) else None
-        if not isinstance(index, int):
+        if not isinstance(index, int) or not 0 <= index < presentation.total:
             logger.warning(f"bad goto payload: {data!r}")
+            await send_error("That slide doesn't exist.")
             return
         if presentation_observer0.paused:
             await resume(replay=False)
@@ -366,6 +370,7 @@ async def run_bot(websocket_client):
             await goto(message.data)
         else:
             logger.debug(f"unhandled client message: {message.type}")
+            await send_error(f"The server doesn't understand '{message.type}'.")
 
     @ws_transport.event_handler("on_client_connected")
     async def on_client_connected():
