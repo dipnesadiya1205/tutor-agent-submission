@@ -13,7 +13,9 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     LLMMessagesAppendFrame,
-    UserStartedSpeakingFrame, StartFrame,
+    StartFrame,
+    TTSSpeakFrame,
+    UserStartedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -23,14 +25,16 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import OpenAIRealtimeSTTService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
+from playback import MicGate, PlaybackMeter, ResponseProgress, SpeechTracker, snapshot
 from presentation import PresentationState, Slide
-from prompts import QNA_INTRO, RESUME_SLIDE, SYSTEM_PROMPT
+from prompts import QNA_INTRO, RESUME_AFTER_PAUSE, RESUME_SLIDE, SYSTEM_PROMPT
 
 load_dotenv(override=True)
 
@@ -109,9 +113,17 @@ class PresentationObserver0(BaseObserver):
         self._is_bot_speaking = False
         self._silence_timer: asyncio.TimerHandle | None = None
         self._user_spoke_since_last_slide = False
+        self.paused = False
 
     def set_task(self, task: PipelineTask):
         self.task = task
+
+    def set_paused(self, paused: bool):
+        self.paused = paused
+        if paused:
+            self._cancel_silence_timer()
+        elif not self._is_bot_speaking:
+            self._schedule_silence_check()
 
     def _cancel_silence_timer(self):
         if self._silence_timer:
@@ -128,7 +140,7 @@ class PresentationObserver0(BaseObserver):
         )
 
     async def _on_silence_timeout(self):
-        if self._is_bot_speaking:
+        if self._is_bot_speaking or self.paused:
             return
         if self.state.in_qna:
             # Open conversation now, nothing to auto-advance to.
@@ -159,7 +171,8 @@ class PresentationObserver0(BaseObserver):
 
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._is_bot_speaking = False
-            self._schedule_silence_check()
+            if not self.paused:
+                self._schedule_silence_check()
 
         elif isinstance(frame, (EndFrame, CancelFrame)):
             # Pipeline is ending; stop any pending timers.
@@ -244,14 +257,22 @@ async def run_bot(websocket_client):
         ),
     )
 
+    rtvi = RTVIProcessor()
+    mic_gate = MicGate()
+    progress = ResponseProgress()
+
     pipeline = Pipeline(
         [
             ws_transport.input(),
+            rtvi,
+            mic_gate,
             stt,
             context_aggregator.user(),
             llm,
             tts,
+            SpeechTracker(progress),
             ws_transport.output(),
+            PlaybackMeter(progress),
             context_aggregator.assistant(),
         ]
     )
@@ -265,10 +286,51 @@ async def run_bot(websocket_client):
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        observers=[presentation_observer0],
+        observers=[presentation_observer0, RTVIObserver(rtvi)],
         enable_turn_tracking=False
     )
     presentation_observer0.set_task(task)
+
+    paused_speech = None
+
+    async def pause():
+        nonlocal paused_speech
+        if presentation_observer0.paused:
+            return
+        paused_speech = snapshot(progress)
+        presentation_observer0.set_paused(True)
+        mic_gate.closed = True
+        await rtvi.interrupt_bot()
+        await rtvi.send_server_message({"type": "playback", "state": "paused"})
+
+    async def resume():
+        nonlocal paused_speech
+        if not presentation_observer0.paused:
+            return
+        pending, paused_speech = paused_speech, None
+        mic_gate.closed = False
+        frames = []
+        if pending and pending.text:
+            frames.append(TTSSpeakFrame(pending.text))
+        if pending and not pending.response_complete:
+            frames.append(
+                LLMMessagesAppendFrame(
+                    messages=[{"role": "system", "content": RESUME_AFTER_PAUSE}], run_llm=True
+                )
+            )
+        if frames:
+            await task.queue_frames(frames)
+        presentation_observer0.set_paused(False)
+        await rtvi.send_server_message({"type": "playback", "state": "playing"})
+
+    @rtvi.event_handler("on_client_message")
+    async def on_client_message(processor, message):
+        if message.type == "pause":
+            await pause()
+        elif message.type == "resume":
+            await resume()
+        else:
+            logger.debug(f"unhandled client message: {message.type}")
 
     @ws_transport.event_handler("on_client_connected")
     async def on_client_connected():

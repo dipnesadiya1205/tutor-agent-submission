@@ -18,6 +18,12 @@ RESUME_SLIDE = (
     "Do not repeat material you already covered and do not start the slide over."
 )
 
+RESUME_AFTER_PAUSE = (
+    "The class paused the presentation and has just resumed. Your previous message was cut off partway through. "
+    "Pick up exactly where it stopped and finish the thought. Do not greet the class again, do not recap, "
+    "and do not repeat anything already said."
+)
+
 QNA_INTRO = (
     "The presentation is over. You are now in an open Q&A session with the students. "
     "Let them know the slides are finished and invite their questions. "
