@@ -112,6 +112,13 @@ class WebsocketClientApp {
         this.slidePanel?.classList.toggle('loading', loading);
     }
 
+    private replayAnimation(el: HTMLElement, className: string): void {
+        el.classList.remove(className);
+        // Force a reflow so the browser restarts the animation.
+        void el.offsetWidth;
+        el.classList.add(className);
+    }
+
     private handleServerMessage(msg: ServerMessage): void {
         switch (msg.type) {
             case 'deck':
@@ -136,12 +143,13 @@ class WebsocketClientApp {
         this.updateNavButtons();
         if (!this.slideTitle || !this.slideCounter || !this.modeBadge) return;
 
-        if (state.index < 0) {
-            this.slideCounter.textContent = 'Starting soon';
-            this.slideTitle.textContent = 'Natural Disasters';
-        } else {
-            this.slideCounter.textContent = `Slide ${state.index + 1} of ${state.total}`;
-            this.slideTitle.textContent = state.title ?? '';
+        const title = state.index < 0 ? 'Natural Disasters' : state.title ?? '';
+        const counter = state.index < 0 ? 'Starting soon' : `Slide ${state.index + 1} of ${state.total}`;
+
+        this.slideCounter.textContent = counter;
+        if (this.slideTitle.textContent !== title) {
+            this.slideTitle.textContent = title;
+            this.replayAnimation(this.slideTitle, 'slide-enter');
         }
 
         const qna = state.mode === 'qna';
@@ -207,15 +215,22 @@ class WebsocketClientApp {
      */
     private log(message: string): void {
         if (!this.debugLog) return;
+        const log = this.debugLog;
+        // Only follow new entries if the reader hasn't scrolled up to look at something.
+        const pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+
         const entry = document.createElement('div');
+        entry.className = 'log-entry';
         entry.textContent = `${new Date().toISOString()} - ${message}`;
         if (message.startsWith('User: ')) {
-            entry.style.color = '#2196F3';
+            entry.classList.add('log-user');
         } else if (message.startsWith('Bot: ')) {
-            entry.style.color = '#4CAF50';
+            entry.classList.add('log-bot');
         }
-        this.debugLog.appendChild(entry);
-        this.debugLog.scrollTop = this.debugLog.scrollHeight;
+        log.appendChild(entry);
+        if (pinned) {
+            log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
+        }
         console.log(message);
     }
 
