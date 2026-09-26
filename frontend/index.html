@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Chatbot</title>
+    <title>Tutor Bot</title>
   </head>
 
   <body>
@@ -15,6 +15,14 @@
           <button id="disconnect-btn" disabled>Disconnect</button>
         </div>
       </div>
+
+      <section class="slide-panel" id="slide-panel">
+        <div class="slide-meta">
+          <span id="slide-counter">Not started</span>
+          <span class="mode-badge" id="mode-badge">Presenting</span>
+        </div>
+        <h2 id="slide-title">Connect to begin the lesson</h2>
+      </section>
 
       <audio id="bot-audio" autoplay></audio>
 

@@ -20,13 +20,31 @@ import {
 } from '@pipecat-ai/client-js';
 import { WebSocketTransport } from '@pipecat-ai/websocket-transport';
 
+type SlideInfo = { index: number; title: string };
+
+type SlideState = {
+    index: number;
+    total: number;
+    mode: 'presenting' | 'qna';
+    title: string | null;
+};
+
+type ServerMessage =
+    | ({ type: 'slide' } & SlideState)
+    | ({ type: 'deck'; slides: SlideInfo[] } & SlideState)
+    | { type: 'playback'; state: 'paused' | 'playing' };
+
 class WebsocketClientApp {
     private pcClient: PipecatClient | null = null;
     private connectBtn: HTMLButtonElement | null = null;
     private disconnectBtn: HTMLButtonElement | null = null;
     private statusSpan: HTMLElement | null = null;
     private debugLog: HTMLElement | null = null;
+    private slideTitle: HTMLElement | null = null;
+    private slideCounter: HTMLElement | null = null;
+    private modeBadge: HTMLElement | null = null;
     private botAudio: HTMLAudioElement;
+    private slides: SlideInfo[] = [];
 
     constructor() {
         console.log('WebsocketClientApp');
@@ -51,6 +69,40 @@ class WebsocketClientApp {
         ) as HTMLButtonElement;
         this.statusSpan = document.getElementById('connection-status');
         this.debugLog = document.getElementById('debug-log');
+        this.slideTitle = document.getElementById('slide-title');
+        this.slideCounter = document.getElementById('slide-counter');
+        this.modeBadge = document.getElementById('mode-badge');
+    }
+
+    private handleServerMessage(msg: ServerMessage): void {
+        switch (msg.type) {
+            case 'deck':
+                this.slides = msg.slides;
+                this.renderSlide(msg);
+                break;
+            case 'slide':
+                this.renderSlide(msg);
+                break;
+            case 'playback':
+                this.log(`Playback: ${msg.state}`);
+                break;
+        }
+    }
+
+    private renderSlide(state: SlideState): void {
+        if (!this.slideTitle || !this.slideCounter || !this.modeBadge) return;
+
+        if (state.index < 0) {
+            this.slideCounter.textContent = 'Starting soon';
+            this.slideTitle.textContent = 'Natural Disasters';
+        } else {
+            this.slideCounter.textContent = `Slide ${state.index + 1} of ${state.total}`;
+            this.slideTitle.textContent = state.title ?? '';
+        }
+
+        const qna = state.mode === 'qna';
+        this.modeBadge.textContent = qna ? 'Q&A' : 'Presenting';
+        this.modeBadge.classList.toggle('qna', qna);
     }
 
     /**
@@ -174,6 +226,7 @@ class WebsocketClientApp {
                         }
                     },
                     onBotTranscript: (data) => this.log(`Bot: ${data.text}`),
+                    onServerMessage: (data) => this.handleServerMessage(data as ServerMessage),
                     onMessageError: (error) => console.error('Message error:', error),
                     onError: (error) => console.error('Error:', error),
                 },

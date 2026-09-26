@@ -19,6 +19,13 @@ class Slide:
     def prompt(self) -> str:
         return f"{self.title}\n\n{self.notes}"
 
+    @property
+    def heading(self) -> str:
+        # "SLIDE 3: WHY NATURAL DISASTERS HAPPEN" -> "Why Natural Disasters Happen"
+        _, _, rest = self.title.partition(":")
+        words = (rest or self.title).strip().lower().split()
+        return " ".join(w if w in ("and", "of", "on") else w.capitalize() for w in words)
+
 
 ChangeListener = Callable[["PresentationState"], Awaitable[None]]
 
@@ -95,5 +102,11 @@ class PresentationState:
             "index": self.index,
             "total": self.total,
             "mode": self.mode.value,
-            "title": self.current.title if self.current else None,
+            "title": self.current.heading if self.current else None,
+        }
+
+    def deck(self) -> dict:
+        return {
+            "slides": [{"index": i, "title": s.heading} for i, s in enumerate(self.slides)],
+            **self.snapshot(),
         }

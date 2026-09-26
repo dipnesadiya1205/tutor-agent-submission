@@ -43,6 +43,41 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.slide-panel {
+  background-color: #fff;
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 20px;
+  min-height: 140px;
+}
+
+.slide-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 12px;
+}
+
+.mode-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background-color: #e3f2fd;
+  color: #1565c0;
+  font-weight: 600;
+}
+
+.mode-badge.qna {
+  background-color: #fff3e0;
+  color: #e65100;
+}
+
+#slide-title {
+  margin: 0;
+  font-size: 28px;
+}
+
 .main-content {
   background-color: #fff;
   border-radius: 8px;

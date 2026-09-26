@@ -291,6 +291,16 @@ async def run_bot(websocket_client):
     )
     presentation_observer0.set_task(task)
 
+    async def broadcast_slide(state: PresentationState):
+        await rtvi.send_server_message({"type": "slide", **state.snapshot()})
+
+    presentation.on_change(broadcast_slide)
+
+    @rtvi.event_handler("on_client_ready")
+    async def on_client_ready(processor):
+        await processor.set_bot_ready()
+        await processor.send_server_message({"type": "deck", **presentation.deck()})
+
     paused_speech = None
 
     async def pause():
