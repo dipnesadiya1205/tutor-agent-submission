@@ -14,7 +14,6 @@ from pipecat.frames.frames import (
     EndFrame,
     LLMMessagesAppendFrame,
     OutputTransportMessageUrgentFrame,
-    StartFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
 )
@@ -159,11 +158,9 @@ class PresentationObserver0(BaseObserver):
     async def on_push_frame(self, data: FramePushed):
         frame = data.frame
 
-        if isinstance(frame, StartFrame):
-            # Pipeline just started, force start with first slide
-            await self._on_silence_timeout()
-
-        elif isinstance(frame, BotStartedSpeakingFrame):
+        # Observers see every frame each processor pushes, so a single event can
+        # show up here many times. Everything below has to be safe to repeat.
+        if isinstance(frame, BotStartedSpeakingFrame):
             self._is_bot_speaking = True
             self._cancel_silence_timer()
 
@@ -181,6 +178,11 @@ class PresentationObserver0(BaseObserver):
             self._cancel_silence_timer()
 
         # Observers are side-effect-only; nothing to push downstream.
+
+    async def begin(self):
+        if self.state.started:
+            return
+        await self.go_to_next_slide()
 
     async def continue_current_slide(self):
         """Instruct the AI to stay on the current slide and continue where it left off."""
@@ -339,6 +341,7 @@ async def _run_pipeline(websocket_client):
     async def on_client_ready(processor):
         await processor.set_bot_ready()
         await processor.send_server_message({"type": "deck", **presentation.deck()})
+        await presentation_observer0.begin()
 
     paused_speech = None
 
