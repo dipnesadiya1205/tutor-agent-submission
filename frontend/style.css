@@ -38,6 +38,21 @@ body {
   color: white;
 }
 
+#pause-btn {
+  background-color: #ff9800;
+  color: white;
+  min-width: 88px;
+}
+
+#pause-btn.paused {
+  background-color: #2196f3;
+}
+
+.slide-panel.paused {
+  outline: 2px dashed #ff9800;
+  outline-offset: -2px;
+}
+
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;

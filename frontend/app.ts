@@ -38,6 +38,8 @@ class WebsocketClientApp {
     private pcClient: PipecatClient | null = null;
     private connectBtn: HTMLButtonElement | null = null;
     private disconnectBtn: HTMLButtonElement | null = null;
+    private pauseBtn: HTMLButtonElement | null = null;
+    private paused = false;
     private statusSpan: HTMLElement | null = null;
     private debugLog: HTMLElement | null = null;
     private slideTitle: HTMLElement | null = null;
@@ -67,6 +69,7 @@ class WebsocketClientApp {
         this.disconnectBtn = document.getElementById(
             'disconnect-btn'
         ) as HTMLButtonElement;
+        this.pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement;
         this.statusSpan = document.getElementById('connection-status');
         this.debugLog = document.getElementById('debug-log');
         this.slideTitle = document.getElementById('slide-title');
@@ -85,6 +88,7 @@ class WebsocketClientApp {
                 break;
             case 'playback':
                 this.log(`Playback: ${msg.state}`);
+                this.setPaused(msg.state === 'paused');
                 break;
         }
     }
@@ -111,6 +115,24 @@ class WebsocketClientApp {
     private setupEventListeners(): void {
         this.connectBtn?.addEventListener('click', () => this.connect());
         this.disconnectBtn?.addEventListener('click', () => this.disconnect());
+        this.pauseBtn?.addEventListener('click', () => this.togglePause());
+    }
+
+    private togglePause(): void {
+        if (!this.pcClient || !this.pauseBtn) return;
+        // Lock the button until the backend confirms the new state.
+        this.pauseBtn.disabled = true;
+        this.pcClient.sendClientMessage(this.paused ? 'resume' : 'pause');
+    }
+
+    private setPaused(paused: boolean): void {
+        this.paused = paused;
+        if (this.pauseBtn) {
+            this.pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+            this.pauseBtn.classList.toggle('paused', paused);
+            this.pauseBtn.disabled = false;
+        }
+        document.getElementById('slide-panel')?.classList.toggle('paused', paused);
     }
 
     /**
@@ -214,11 +236,14 @@ class WebsocketClientApp {
                         this.updateStatus('Disconnected');
                         if (this.connectBtn) this.connectBtn.disabled = false;
                         if (this.disconnectBtn) this.disconnectBtn.disabled = true;
+                        this.setPaused(false);
+                        if (this.pauseBtn) this.pauseBtn.disabled = true;
                         this.log('Client disconnected');
                     },
                     onBotReady: (data) => {
                         this.log(`Bot ready: ${JSON.stringify(data)}`);
                         this.setupMediaTracks();
+                        if (this.pauseBtn) this.pauseBtn.disabled = false;
                     },
                     onUserTranscript: (data) => {
                         if (data.final) {
