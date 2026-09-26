@@ -60,6 +60,8 @@ class WebsocketClientApp {
     private activityLabel: HTMLElement | null = null;
     private slidePanel: HTMLElement | null = null;
     private transcript: Transcript | null = null;
+    private deckList: HTMLElement | null = null;
+    private visited = new Set<number>();
     private statusSpan: HTMLElement | null = null;
     private debugLog: HTMLElement | null = null;
     private slideTitle: HTMLElement | null = null;
@@ -102,6 +104,41 @@ class WebsocketClientApp {
         this.slidePanel = document.getElementById('slide-panel');
         const transcriptEl = document.getElementById('transcript');
         if (transcriptEl) this.transcript = new Transcript(transcriptEl);
+        this.deckList = document.getElementById('deck-list');
+    }
+
+    private renderDeck(): void {
+        if (!this.deckList) return;
+        this.deckList.innerHTML = '';
+        for (const slide of this.slides) {
+            const item = document.createElement('li');
+            item.className = 'deck-item';
+            item.dataset.index = String(slide.index);
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.innerHTML = `<span class="deck-num">${slide.index + 1}</span><span class="deck-title"></span>`;
+            (button.querySelector('.deck-title') as HTMLElement).textContent = slide.title;
+            button.addEventListener('click', () => this.goToSlide(slide.index));
+
+            item.appendChild(button);
+            this.deckList.appendChild(item);
+        }
+        this.updateDeck();
+    }
+
+    private updateDeck(): void {
+        if (!this.deckList) return;
+        const current = this.slide?.index ?? -1;
+        const busy = !this.pcClient || this.jumpPending;
+        this.deckList.querySelectorAll<HTMLElement>('.deck-item').forEach((item) => {
+            const index = Number(item.dataset.index);
+            item.classList.toggle('current', index === current);
+            item.classList.toggle('visited', this.visited.has(index) && index !== current);
+            const button = item.querySelector('button');
+            if (button) button.disabled = busy || index === current;
+        });
+        this.deckList.querySelector('.deck-item.current')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
 
     private setActivity(activity: Activity): void {
@@ -127,6 +164,7 @@ class WebsocketClientApp {
         switch (msg.type) {
             case 'deck':
                 this.slides = msg.slides;
+                this.renderDeck();
                 this.renderSlide(msg);
                 break;
             case 'slide':
@@ -142,9 +180,11 @@ class WebsocketClientApp {
     private renderSlide(state: SlideState): void {
         this.slide = state;
         this.jumpPending = false;
+        if (state.index >= 0) this.visited.add(state.index);
         this.slidePanel?.classList.remove('transitioning');
         this.setLoading(false);
         this.updateNavButtons();
+        this.updateDeck();
         if (!this.slideTitle || !this.slideCounter || !this.modeBadge) return;
 
         const title = state.index < 0 ? 'Natural Disasters' : state.title ?? '';
@@ -178,6 +218,7 @@ class WebsocketClientApp {
         this.log(`Jumping to slide ${index + 1}`);
         this.jumpPending = true;
         this.updateNavButtons();
+        this.updateDeck();
         this.slidePanel?.classList.add('transitioning');
         this.pcClient.sendClientMessage('goto', { index });
     }
@@ -338,9 +379,11 @@ class WebsocketClientApp {
                         if (this.pauseBtn) this.pauseBtn.disabled = true;
                         this.slide = null;
                         this.jumpPending = false;
+                        this.visited.clear();
                         this.setLoading(false);
                         this.setActivity('idle');
                         this.updateNavButtons();
+                        this.updateDeck();
                         this.log('Client disconnected');
                     },
                     onBotLlmStarted: () => {
