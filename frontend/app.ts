@@ -58,6 +58,8 @@ class WebsocketClientApp {
     private slide: SlideState | null = null;
     private leavingOnPurpose = false;
     private lastErrorAt = 0;
+    private connecting = false;
+    private pendingError: string | null = null;
     private jumpPending = false;
     private activity: Activity = 'idle';
     private activityEl: HTMLElement | null = null;
@@ -382,7 +384,55 @@ class WebsocketClientApp {
      * Initialize and connect to the bot
      * This sets up the Pipecat client, initializes devices, and establishes the connection
      */
+    private resetSessionUi(connectLabel = 'Connect'): void {
+        this.updateStatus('Disconnected');
+        if (this.connectBtn) {
+            this.connectBtn.disabled = false;
+            this.connectBtn.textContent = connectLabel;
+        }
+        if (this.disconnectBtn) this.disconnectBtn.disabled = true;
+        this.setPaused(false);
+        if (this.pauseBtn) this.pauseBtn.disabled = true;
+        this.slide = null;
+        this.jumpPending = false;
+        this.visited.clear();
+        this.setLoading(false);
+        this.setActivity('idle');
+        this.updateNavButtons();
+        this.updateDeck();
+    }
+
+    private stopBotAudio(): void {
+        if (this.botAudio.srcObject && 'getAudioTracks' in this.botAudio.srcObject) {
+            this.botAudio.srcObject.getAudioTracks().forEach((track) => track.stop());
+            this.botAudio.srcObject = null;
+        }
+    }
+
+    /**
+     * After a fatal error the client never finishes connecting or disconnecting,
+     * so drop it and put the UI back to a usable state ourselves.
+     */
+    private abandonSession(): void {
+        const client = this.pcClient;
+        this.pcClient = null;
+        this.connecting = false;
+        this.pendingError = null;
+        this.stopBotAudio();
+        this.resetSessionUi('Retry');
+        if (client) {
+            try {
+                client.disconnect().catch(() => {});
+            } catch {
+                // Already torn down; nothing more to do.
+            }
+        }
+    }
+
     public async connect(): Promise<void> {
+        let client: PipecatClient | null = null;
+        const isCurrent = () => client !== null && this.pcClient === client;
+
         try {
             const startTime = Date.now();
             if (this.connectBtn) {
@@ -391,6 +441,8 @@ class WebsocketClientApp {
             }
             this.setLoading(true);
             this.transcript?.clear();
+            this.connecting = true;
+            this.pendingError = null;
 
             //const transport = new DailyTransport();
             const PipecatConfig: PipecatClientOptions = {
@@ -399,6 +451,7 @@ class WebsocketClientApp {
                 enableCam: false,
                 callbacks: {
                     onConnected: () => {
+                        if (!isCurrent()) return;
                         this.updateStatus('Connected');
                         if (this.connectBtn) {
                             this.connectBtn.disabled = true;
@@ -407,33 +460,23 @@ class WebsocketClientApp {
                         if (this.disconnectBtn) this.disconnectBtn.disabled = false;
                     },
                     onDisconnected: () => {
-                        const wasReady = !!this.slide;
-                        const recentError = Date.now() - this.lastErrorAt < 3000;
-                        if (!this.leavingOnPurpose && !recentError) {
-                            showToast(
-                                wasReady
-                                    ? 'The connection to the backend dropped. Click Connect to start again.'
-                                    : 'The backend closed the connection before the lesson could start. Check the server logs.',
-                                'error',
-                                'Connection lost'
-                            );
+                        if (!isCurrent()) return;
+                        // While connecting, connect() reports the failure with more context.
+                        if (!this.leavingOnPurpose && !this.connecting) {
+                            const recentError = Date.now() - this.lastErrorAt < 3000;
+                            if (this.pendingError) {
+                                showToast(this.pendingError, 'error', 'Session ended');
+                            } else if (!recentError) {
+                                showToast(
+                                    'The connection to the backend dropped. Click Connect to start again.',
+                                    'error',
+                                    'Connection lost'
+                                );
+                            }
                         }
+                        this.pendingError = null;
                         this.leavingOnPurpose = false;
-                        this.updateStatus('Disconnected');
-                        if (this.connectBtn) {
-                            this.connectBtn.disabled = false;
-                            this.connectBtn.textContent = 'Connect';
-                        }
-                        if (this.disconnectBtn) this.disconnectBtn.disabled = true;
-                        this.setPaused(false);
-                        if (this.pauseBtn) this.pauseBtn.disabled = true;
-                        this.slide = null;
-                        this.jumpPending = false;
-                        this.visited.clear();
-                        this.setLoading(false);
-                        this.setActivity('idle');
-                        this.updateNavButtons();
-                        this.updateDeck();
+                        this.resetSessionUi();
                         this.log('Client disconnected');
                     },
                     onBotLlmStarted: () => {
@@ -472,49 +515,59 @@ class WebsocketClientApp {
                         showToast(describeError(error), 'error', 'Message failed');
                     },
                     onError: (error) => {
+                        if (!isCurrent()) return;
                         console.error('Error:', error);
                         this.lastErrorAt = Date.now();
+                        const text = describeError(error);
                         const fatal = !!(error as { data?: { fatal?: boolean } }).data?.fatal;
-                        showToast(describeError(error), 'error', fatal ? 'Session ended' : 'Something went wrong');
+                        if (fatal) {
+                            // The client won't recover from this, so end the session here.
+                            this.log(`Fatal error: ${text}`);
+                            showToast(text, 'error', this.slide ? 'Session ended' : "Couldn't start the lesson");
+                            this.abandonSession();
+                            return;
+                        }
+                        if (this.connecting) {
+                            // Hold it: the connect failure that follows will surface it with context.
+                            this.pendingError = text;
+                            return;
+                        }
+                        showToast(text, 'error', 'Something went wrong');
                     },
                 },
             };
-            this.pcClient = new PipecatClient(PipecatConfig);
+            client = new PipecatClient(PipecatConfig);
+            this.pcClient = client;
             // @ts-ignore
             window.pcClient = this.pcClient; // Expose for debugging
             this.setupTrackListeners();
 
             this.log('Initializing devices...');
-            await this.pcClient.initDevices();
+            await client.initDevices();
 
             this.log('Connecting to bot...');
-            await this.pcClient.startBotAndConnect({
+            await client.startBotAndConnect({
                 // The baseURL and endpoint of your bot server that the client will connect to
                 endpoint: 'http://localhost:7860/connect',
             });
 
+            if (!isCurrent()) return;
             const timeTaken = Date.now() - startTime;
             this.log(`Connection complete, timeTaken: ${timeTaken}`);
+            this.connecting = false;
+            if (this.pendingError) {
+                showToast(this.pendingError, 'error', 'Something went wrong');
+                this.pendingError = null;
+            }
         } catch (error) {
+            // A fatal error already tore this attempt down and reported it.
+            if (!isCurrent()) return;
+            this.connecting = false;
             this.log(`Error connecting: ${(error as Error).message}`);
-            this.updateStatus('Error');
-            this.setLoading(false);
-            if (Date.now() - this.lastErrorAt > 3000) {
-                showToast(connectionHint(error), 'error', "Couldn't connect");
-            }
+            showToast(connectionHint(error, this.pendingError), 'error', "Couldn't connect");
             this.lastErrorAt = Date.now();
-            if (this.connectBtn) {
-                this.connectBtn.disabled = false;
-                this.connectBtn.textContent = 'Retry';
-            }
-            // Clean up if there's an error
-            if (this.pcClient) {
-                try {
-                    await this.pcClient.disconnect();
-                } catch (disconnectError) {
-                    this.log(`Error during disconnect: ${disconnectError}`);
-                }
-            }
+            this.abandonSession();
+            this.updateStatus('Error');
         }
     }
 
@@ -527,15 +580,7 @@ class WebsocketClientApp {
             try {
                 await this.pcClient.disconnect();
                 this.pcClient = null;
-                if (
-                    this.botAudio.srcObject &&
-                    'getAudioTracks' in this.botAudio.srcObject
-                ) {
-                    this.botAudio.srcObject
-                        .getAudioTracks()
-                        .forEach((track) => track.stop());
-                    this.botAudio.srcObject = null;
-                }
+                this.stopBotAudio();
             } catch (error) {
                 this.log(`Error disconnecting: ${(error as Error).message}`);
                 showToast(describeError(error), 'warning', 'Disconnect was not clean');
@@ -548,20 +593,49 @@ function describeError(error: unknown): string {
     if (error instanceof Error) return error.message;
     if (typeof error === 'string') return error;
     if (error && typeof error === 'object') {
-        const data = error as { message?: unknown; data?: { message?: unknown } };
-        const message = data.message ?? data.data?.message;
-        if (typeof message === 'string') return message;
+        const obj = error as {
+            message?: unknown;
+            data?: { error?: unknown; message?: unknown } | string;
+        };
+        const candidates = [
+            typeof obj.data === 'object' ? obj.data?.error : undefined,
+            typeof obj.data === 'object' ? obj.data?.message : undefined,
+            typeof obj.data === 'string' ? obj.data : undefined,
+            obj.message,
+        ];
+        const found = candidates.find((c) => typeof c === 'string' && c.trim());
+        if (typeof found === 'string') return found;
     }
     return 'An unexpected error occurred.';
 }
 
-function connectionHint(error: unknown): string {
+// Messages the transport generates itself; they say a connection failed but not why.
+function isTransportNoise(message: string): boolean {
+    const lower = message.toLowerCase();
+    return (
+        lower.includes('socket') ||
+        lower.includes('disconnected') ||
+        lower.includes('closed') ||
+        lower === 'an unexpected error occurred.'
+    );
+}
+
+function connectionHint(error: unknown, serverMessage: string | null = null): string {
+    // Something the backend said explicitly beats anything we can infer.
+    if (serverMessage && !isTransportNoise(serverMessage)) return serverMessage;
+
     const message = describeError(error);
     const lower = message.toLowerCase();
     if (lower.includes('permission') || lower.includes('notallowed') || lower.includes('denied')) {
         return 'Microphone access was blocked. Allow the microphone in your browser and try again.';
     }
-    if (lower.includes('fetch') || lower.includes('network') || lower.includes('failed to') || lower.includes('econn')) {
+    if (
+        lower.includes('fetch') ||
+        lower.includes('network') ||
+        lower.includes('failed to') ||
+        lower.includes('econn') ||
+        isTransportNoise(message)
+    ) {
         return 'The backend is not reachable. Make sure the server is running on port 7860.';
     }
     if (lower.includes('timeout') || lower.includes('timed out')) {
