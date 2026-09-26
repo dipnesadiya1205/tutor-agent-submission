@@ -13,6 +13,7 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     LLMMessagesAppendFrame,
+    OutputTransportMessageUrgentFrame,
     StartFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
@@ -26,6 +27,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor
+from pipecat.processors.frameworks.rtvi import models as rtvi_models
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import OpenAIRealtimeSTTService
@@ -221,7 +223,33 @@ class PresentationObserver0(BaseObserver):
         )
 
 
+async def send_fatal_error(websocket_client, message: str):
+    """Tell the client why we're giving up, before the pipeline exists to do it for us."""
+    error = rtvi_models.Error(data=rtvi_models.ErrorData(error=message, fatal=True))
+    frame = OutputTransportMessageUrgentFrame(message=error.model_dump(exclude_none=True))
+    payload = await ProtobufFrameSerializer().serialize(frame)
+    if payload:
+        await websocket_client.send_bytes(payload)
+
+
 async def run_bot(websocket_client):
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.error("OPENAI_API_KEY is not set; refusing the session")
+        await send_fatal_error(
+            websocket_client,
+            "The server has no OpenAI API key configured. Add OPENAI_API_KEY to the .env file and restart the backend.",
+        )
+        return
+
+    try:
+        await _run_pipeline(websocket_client)
+    except Exception as e:
+        logger.exception("pipeline failed to start")
+        await send_fatal_error(websocket_client, f"The server hit an error while starting: {e}")
+        raise
+
+
+async def _run_pipeline(websocket_client):
     ws_transport = FastAPIWebsocketTransport(
         websocket=websocket_client,
         params=FastAPIWebsocketParams(

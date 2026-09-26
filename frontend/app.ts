@@ -56,6 +56,8 @@ class WebsocketClientApp {
     private nextBtn: HTMLButtonElement | null = null;
     private paused = false;
     private slide: SlideState | null = null;
+    private leavingOnPurpose = false;
+    private lastErrorAt = 0;
     private jumpPending = false;
     private activity: Activity = 'idle';
     private activityEl: HTMLElement | null = null;
@@ -405,6 +407,18 @@ class WebsocketClientApp {
                         if (this.disconnectBtn) this.disconnectBtn.disabled = false;
                     },
                     onDisconnected: () => {
+                        const wasReady = !!this.slide;
+                        const recentError = Date.now() - this.lastErrorAt < 3000;
+                        if (!this.leavingOnPurpose && !recentError) {
+                            showToast(
+                                wasReady
+                                    ? 'The connection to the backend dropped. Click Connect to start again.'
+                                    : 'The backend closed the connection before the lesson could start. Check the server logs.',
+                                'error',
+                                'Connection lost'
+                            );
+                        }
+                        this.leavingOnPurpose = false;
                         this.updateStatus('Disconnected');
                         if (this.connectBtn) {
                             this.connectBtn.disabled = false;
@@ -454,11 +468,14 @@ class WebsocketClientApp {
                     onServerMessage: (data) => this.handleServerMessage(data as ServerMessage),
                     onMessageError: (error) => {
                         console.error('Message error:', error);
+                        this.lastErrorAt = Date.now();
                         showToast(describeError(error), 'error', 'Message failed');
                     },
                     onError: (error) => {
                         console.error('Error:', error);
-                        showToast(describeError(error), 'error', 'Something went wrong');
+                        this.lastErrorAt = Date.now();
+                        const fatal = !!(error as { data?: { fatal?: boolean } }).data?.fatal;
+                        showToast(describeError(error), 'error', fatal ? 'Session ended' : 'Something went wrong');
                     },
                 },
             };
@@ -482,7 +499,10 @@ class WebsocketClientApp {
             this.log(`Error connecting: ${(error as Error).message}`);
             this.updateStatus('Error');
             this.setLoading(false);
-            showToast(connectionHint(error), 'error', "Couldn't connect");
+            if (Date.now() - this.lastErrorAt > 3000) {
+                showToast(connectionHint(error), 'error', "Couldn't connect");
+            }
+            this.lastErrorAt = Date.now();
             if (this.connectBtn) {
                 this.connectBtn.disabled = false;
                 this.connectBtn.textContent = 'Retry';
@@ -503,6 +523,7 @@ class WebsocketClientApp {
      */
     public async disconnect(): Promise<void> {
         if (this.pcClient) {
+            this.leavingOnPurpose = true;
             try {
                 await this.pcClient.disconnect();
                 this.pcClient = null;

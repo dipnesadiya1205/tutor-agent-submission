@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
@@ -21,6 +22,8 @@ from agent import run_bot
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handles FastAPI startup and shutdown."""
+    if not os.getenv("OPENAI_API_KEY"):
+        print("WARNING: OPENAI_API_KEY is not set. Clients will be refused until it is added to .env.")
     yield  # Run app
 
 
