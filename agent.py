@@ -12,6 +12,9 @@ from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
+    InterruptionFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     LLMMessagesAppendFrame,
     OutputTransportMessageUrgentFrame,
     TTSSpeakFrame,
@@ -30,8 +33,9 @@ from pipecat.processors.frameworks.rtvi import models as rtvi_models
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import OpenAIRealtimeSTTService
-from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
+
+from tts import OpenAITTSWithTimeouts
 
 from playback import MicGate, PlaybackMeter, ResponseProgress, SpeechTracker, snapshot
 from presentation import PresentationState, Slide
@@ -114,10 +118,18 @@ class PresentationObserver0(BaseObserver):
         self._is_bot_speaking = False
         self._silence_timer: asyncio.TimerHandle | None = None
         self._user_spoke_since_last_slide = False
+        self._response_in_flight = False
+        self._llm = None
+        self._output = None
         self.paused = False
 
     def set_task(self, task: PipelineTask):
         self.task = task
+
+    def watch(self, llm, output):
+        """Tell the observer which processors mark the start and end of a spoken response."""
+        self._llm = llm
+        self._output = output
 
     def set_paused(self, paused: bool):
         self.paused = paused
@@ -143,6 +155,12 @@ class PresentationObserver0(BaseObserver):
     async def _on_silence_timeout(self):
         if self._is_bot_speaking or self.paused:
             return
+        if self._response_in_flight:
+            # The presenter went quiet between sentences, likely waiting on speech
+            # synthesis. Don't move on until the whole response is out.
+            logger.debug("bot quiet but response still in flight; waiting")
+            self._schedule_silence_check()
+            return
         if self.state.in_qna:
             # Open conversation now, nothing to auto-advance to.
             return
@@ -160,7 +178,20 @@ class PresentationObserver0(BaseObserver):
 
         # Observers see every frame each processor pushes, so a single event can
         # show up here many times. Everything below has to be safe to repeat.
-        if isinstance(frame, BotStartedSpeakingFrame):
+        if isinstance(frame, LLMFullResponseStartFrame) and data.source is self._llm:
+            self._response_in_flight = True
+            self._cancel_silence_timer()
+
+        elif isinstance(frame, LLMFullResponseEndFrame) and data.source is self._output:
+            # The end marker only passes the transport once all the audio before it has.
+            self._response_in_flight = False
+            if not self._is_bot_speaking and not self.paused:
+                self._schedule_silence_check()
+
+        elif isinstance(frame, InterruptionFrame):
+            self._response_in_flight = False
+
+        elif isinstance(frame, BotStartedSpeakingFrame):
             self._is_bot_speaking = True
             self._cancel_silence_timer()
 
@@ -269,11 +300,18 @@ async def _run_pipeline(websocket_client):
         model="gpt-4o-transcribe",
     )
 
-    tts = OpenAITTSService(
+    # tts-1 is the dependable choice; gpt-4o-mini-tts sounds nicer but its endpoint
+    # has been stalling for long stretches from some networks. Override with
+    # OPENAI_TTS_MODEL to switch. Only the 4o model understands voice instructions.
+    tts_model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
+    tts_kwargs = {}
+    if tts_model.startswith("gpt-4o"):
+        tts_kwargs["instructions"] = "Warm, clear teacher speaking to a classroom. Natural pace, friendly tone."
+    tts = OpenAITTSWithTimeouts(
         api_key=os.getenv("OPENAI_API_KEY"),
-        model="gpt-4o-mini-tts",
+        model=tts_model,
         voice="alloy",
-        instructions="Warm, clear teacher speaking to a classroom. Natural pace, friendly tone.",
+        **tts_kwargs,
     )
 
     llm = OpenAILLMService(
@@ -331,6 +369,7 @@ async def _run_pipeline(websocket_client):
         enable_turn_tracking=False
     )
     presentation_observer0.set_task(task)
+    presentation_observer0.watch(llm, ws_transport.output())
 
     async def broadcast_slide(state: PresentationState):
         await rtvi.send_server_message({"type": "slide", **state.snapshot()})

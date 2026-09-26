@@ -532,6 +532,11 @@ class WebsocketClientApp {
                             this.pendingError = text;
                             return;
                         }
+                        if (isTransientSpeechError(text)) {
+                            // One skipped sentence isn't worth interrupting the class over.
+                            this.log(`Speech hiccup: ${text}`);
+                            return;
+                        }
                         showToast(text, 'error', 'Something went wrong');
                     },
                 },
@@ -607,6 +612,12 @@ function describeError(error: unknown): string {
         if (typeof found === 'string') return found;
     }
     return 'An unexpected error occurred.';
+}
+
+// Non-fatal speech blips the backend retries or recovers from on the next sentence.
+function isTransientSpeechError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes('completed with no audio') || lower.includes('speech request timed out');
 }
 
 // Messages the transport generates itself; they say a connection failed but not why.
