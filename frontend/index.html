@@ -4,12 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tutor Bot</title>
+    <link rel="stylesheet" href="./style.css" />
   </head>
 
   <body>
     <div class="container">
       <div class="status-bar">
-        <div class="status">Transport: <span id="connection-status">Disconnected</span></div>
+        <div class="brand">
+          <h1>Natural Disasters</h1>
+          <div class="status">Status: <strong id="connection-status">Disconnected</strong></div>
+        </div>
         <div class="controls">
           <button id="connect-btn">Connect</button>
           <button id="pause-btn" disabled>Pause</button>
@@ -36,12 +40,11 @@
       <audio id="bot-audio" autoplay></audio>
 
       <div class="debug-panel">
-        <h3>Debug Info</h3>
+        <h3>Session log</h3>
         <div id="debug-log"></div>
       </div>
     </div>
 
     <script type="module" src="./app.ts"></script>
-    <link rel="stylesheet" href="./style.css" />
   </body>
 </html>
