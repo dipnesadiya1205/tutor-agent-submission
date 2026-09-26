@@ -39,10 +39,15 @@
 
       <audio id="bot-audio" autoplay></audio>
 
-      <div class="debug-panel">
-        <h3>Session log</h3>
+      <section class="transcript" id="transcript">
+        <div class="transcript-empty">The conversation will appear here once the lesson starts.</div>
+        <div class="transcript-list"></div>
+      </section>
+
+      <details class="debug-panel">
+        <summary>Session log</summary>
         <div id="debug-log"></div>
-      </div>
+      </details>
     </div>
 
     <script type="module" src="./app.ts"></script>

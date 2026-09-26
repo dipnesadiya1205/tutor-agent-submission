@@ -19,6 +19,7 @@ import {
     RTVIEvent,
 } from '@pipecat-ai/client-js';
 import { WebSocketTransport } from '@pipecat-ai/websocket-transport';
+import { Transcript } from './transcript';
 
 type SlideInfo = { index: number; title: string };
 
@@ -58,6 +59,7 @@ class WebsocketClientApp {
     private activityEl: HTMLElement | null = null;
     private activityLabel: HTMLElement | null = null;
     private slidePanel: HTMLElement | null = null;
+    private transcript: Transcript | null = null;
     private statusSpan: HTMLElement | null = null;
     private debugLog: HTMLElement | null = null;
     private slideTitle: HTMLElement | null = null;
@@ -98,6 +100,8 @@ class WebsocketClientApp {
         this.activityEl = document.getElementById('activity');
         this.activityLabel = document.getElementById('activity-label');
         this.slidePanel = document.getElementById('slide-panel');
+        const transcriptEl = document.getElementById('transcript');
+        if (transcriptEl) this.transcript = new Transcript(transcriptEl);
     }
 
     private setActivity(activity: Activity): void {
@@ -307,6 +311,7 @@ class WebsocketClientApp {
                 this.connectBtn.textContent = 'Connecting…';
             }
             this.setLoading(true);
+            this.transcript?.clear();
 
             //const transport = new DailyTransport();
             const PipecatConfig: PipecatClientOptions = {
@@ -338,9 +343,16 @@ class WebsocketClientApp {
                         this.updateNavButtons();
                         this.log('Client disconnected');
                     },
-                    onBotLlmStarted: () => this.setActivity('thinking'),
+                    onBotLlmStarted: () => {
+                        this.setActivity('thinking');
+                        this.transcript?.endBotTurn();
+                        this.transcript?.setTyping(true);
+                    },
                     onBotStartedSpeaking: () => this.setActivity('speaking'),
-                    onBotStoppedSpeaking: () => this.setActivity('idle'),
+                    onBotStoppedSpeaking: () => {
+                        this.setActivity('idle');
+                        this.transcript?.setTyping(false);
+                    },
                     onUserStartedSpeaking: () => this.setActivity('listening'),
                     onUserStoppedSpeaking: () => {
                         if (this.activity === 'listening') this.setActivity('thinking');
@@ -353,9 +365,13 @@ class WebsocketClientApp {
                     onUserTranscript: (data) => {
                         if (data.final) {
                             this.log(`User: ${data.text}`);
+                            this.transcript?.addUser(data.text);
                         }
                     },
-                    onBotTranscript: (data) => this.log(`Bot: ${data.text}`),
+                    onBotTranscript: (data) => {
+                        this.log(`Bot: ${data.text}`);
+                        this.transcript?.appendBot(data.text);
+                    },
                     onServerMessage: (data) => this.handleServerMessage(data as ServerMessage),
                     onMessageError: (error) => console.error('Message error:', error),
                     onError: (error) => console.error('Error:', error),
