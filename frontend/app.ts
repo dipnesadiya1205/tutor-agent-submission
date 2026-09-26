@@ -79,6 +79,30 @@ class WebsocketClientApp {
 
         this.setupDOMElements();
         this.setupEventListeners();
+        this.setupTheme();
+    }
+
+    private setupTheme(): void {
+        const btn = document.getElementById('theme-btn');
+        if (!btn) return;
+
+        const apply = (dark: boolean) => {
+            document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+            btn.textContent = dark ? '☀' : '☾';
+            btn.setAttribute('aria-pressed', String(dark));
+        };
+
+        apply(document.documentElement.dataset.theme === 'dark');
+
+        btn.addEventListener('click', () => {
+            const dark = document.documentElement.dataset.theme !== 'dark';
+            apply(dark);
+            try {
+                localStorage.setItem('theme', dark ? 'dark' : 'light');
+            } catch {
+                // Private mode or storage disabled; the choice just won't persist.
+            }
+        });
     }
 
     /**
