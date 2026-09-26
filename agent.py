@@ -30,6 +30,7 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
 from presentation import PresentationState, Slide
+from prompts import QNA_INTRO, RESUME_SLIDE, SYSTEM_PROMPT
 
 load_dotenv(override=True)
 
@@ -172,16 +173,10 @@ class PresentationObserver0(BaseObserver):
         if slide is None:
             return
         self._user_spoke_since_last_slide = False
-        new_messages = [
-            {
-                "role": "system",
-                "content": (
-                    f"You are still on {slide.title}. Continue presenting this slide where you left off. "
-                    "Do not repeat what you already said; pick up from there."
-                ),
-            }
-        ]
-        await self.task.queue_frames([LLMMessagesAppendFrame(messages=new_messages, run_llm=True)])
+        content = RESUME_SLIDE.format(title=slide.title)
+        await self.task.queue_frames(
+            [LLMMessagesAppendFrame(messages=[{"role": "system", "content": content}], run_llm=True)]
+        )
 
     async def go_to_next_slide(self):
         self._user_spoke_since_last_slide = False
@@ -197,14 +192,8 @@ class PresentationObserver0(BaseObserver):
     async def start_qna(self):
         await self.state.enter_qna()
         self._user_spoke_since_last_slide = False
-        content = (
-            "The presentation is over. You are now in an open Q&A session with the students. "
-            "Let them know the slides are finished and invite their questions. "
-            "Keep answers short and conversational, and wait for them to speak rather than lecturing. "
-            "If a student asks to go back to a slide or topic, revisit that slide's material."
-        )
         await self.task.queue_frames(
-            [LLMMessagesAppendFrame(messages=[{"role": "system", "content": content}], run_llm=True)]
+            [LLMMessagesAppendFrame(messages=[{"role": "system", "content": QNA_INTRO}], run_llm=True)]
         )
 
 
@@ -219,7 +208,7 @@ async def run_bot(websocket_client):
         ),
     )
 
-    messages = []
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     stt = OpenAIRealtimeSTTService(
         api_key=os.getenv("OPENAI_API_KEY"),
@@ -230,7 +219,7 @@ async def run_bot(websocket_client):
         api_key=os.getenv("OPENAI_API_KEY"),
         model="gpt-4o-mini-tts",
         voice="alloy",
-        instructions="AI presenter for business people. Speak fast.",
+        instructions="Warm, clear teacher speaking to a classroom. Natural pace, friendly tone.",
     )
 
     llm = OpenAILLMService(
