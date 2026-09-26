@@ -75,6 +75,65 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #bbb;
+}
+
+.activity[data-state="listening"] .activity-dot {
+  background-color: #2196f3;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.activity[data-state="thinking"] .activity-dot {
+  background-color: #9c27b0;
+  animation: pulse 0.7s ease-in-out infinite;
+}
+
+.activity[data-state="speaking"] .activity-dot {
+  background-color: #4caf50;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.activity[data-state="paused"] .activity-dot {
+  background-color: #ff9800;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.6); opacity: 0.5; }
+}
+
+.slide-panel.loading #slide-title,
+.slide-panel.loading #slide-counter {
+  color: transparent;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #eee 25%, #f7f7f7 50%, #eee 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+.slide-panel.loading #slide-title {
+  width: 60%;
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.slide-panel.transitioning #slide-title {
+  opacity: 0.4;
+}
+
 .mode-badge {
   padding: 3px 10px;
   border-radius: 999px;

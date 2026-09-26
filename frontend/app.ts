@@ -34,6 +34,16 @@ type ServerMessage =
     | ({ type: 'deck'; slides: SlideInfo[] } & SlideState)
     | { type: 'playback'; state: 'paused' | 'playing' };
 
+type Activity = 'idle' | 'listening' | 'thinking' | 'speaking' | 'paused';
+
+const ACTIVITY_LABELS: Record<Activity, string> = {
+    idle: 'Idle',
+    listening: 'Listening',
+    thinking: 'Thinking',
+    speaking: 'Speaking',
+    paused: 'Paused',
+};
+
 class WebsocketClientApp {
     private pcClient: PipecatClient | null = null;
     private connectBtn: HTMLButtonElement | null = null;
@@ -43,6 +53,11 @@ class WebsocketClientApp {
     private nextBtn: HTMLButtonElement | null = null;
     private paused = false;
     private slide: SlideState | null = null;
+    private jumpPending = false;
+    private activity: Activity = 'idle';
+    private activityEl: HTMLElement | null = null;
+    private activityLabel: HTMLElement | null = null;
+    private slidePanel: HTMLElement | null = null;
     private statusSpan: HTMLElement | null = null;
     private debugLog: HTMLElement | null = null;
     private slideTitle: HTMLElement | null = null;
@@ -80,6 +95,21 @@ class WebsocketClientApp {
         this.slideTitle = document.getElementById('slide-title');
         this.slideCounter = document.getElementById('slide-counter');
         this.modeBadge = document.getElementById('mode-badge');
+        this.activityEl = document.getElementById('activity');
+        this.activityLabel = document.getElementById('activity-label');
+        this.slidePanel = document.getElementById('slide-panel');
+    }
+
+    private setActivity(activity: Activity): void {
+        // While paused nothing else should override the badge.
+        if (this.paused && activity !== 'paused') return;
+        this.activity = activity;
+        if (this.activityEl) this.activityEl.dataset.state = activity;
+        if (this.activityLabel) this.activityLabel.textContent = ACTIVITY_LABELS[activity];
+    }
+
+    private setLoading(loading: boolean): void {
+        this.slidePanel?.classList.toggle('loading', loading);
     }
 
     private handleServerMessage(msg: ServerMessage): void {
@@ -100,6 +130,9 @@ class WebsocketClientApp {
 
     private renderSlide(state: SlideState): void {
         this.slide = state;
+        this.jumpPending = false;
+        this.slidePanel?.classList.remove('transitioning');
+        this.setLoading(false);
         this.updateNavButtons();
         if (!this.slideTitle || !this.slideCounter || !this.modeBadge) return;
 
@@ -131,15 +164,18 @@ class WebsocketClientApp {
         if (!this.pcClient || !this.slide) return;
         if (index < 0 || index >= this.slide.total) return;
         this.log(`Jumping to slide ${index + 1}`);
+        this.jumpPending = true;
+        this.updateNavButtons();
+        this.slidePanel?.classList.add('transitioning');
         this.pcClient.sendClientMessage('goto', { index });
     }
 
     private updateNavButtons(): void {
-        const connected = !!this.pcClient && !!this.slide;
-        if (this.prevBtn) this.prevBtn.disabled = !connected || (this.slide?.index ?? 0) <= 0;
+        const ready = !!this.pcClient && !!this.slide && !this.jumpPending;
+        if (this.prevBtn) this.prevBtn.disabled = !ready || (this.slide?.index ?? 0) <= 0;
         if (this.nextBtn) {
             const idx = this.slide?.index ?? -1;
-            this.nextBtn.disabled = !connected || idx >= (this.slide?.total ?? 0) - 1;
+            this.nextBtn.disabled = !ready || idx >= (this.slide?.total ?? 0) - 1;
         }
     }
 
@@ -157,7 +193,13 @@ class WebsocketClientApp {
             this.pauseBtn.classList.toggle('paused', paused);
             this.pauseBtn.disabled = false;
         }
-        document.getElementById('slide-panel')?.classList.toggle('paused', paused);
+        this.slidePanel?.classList.toggle('paused', paused);
+        if (paused) {
+            this.setActivity('paused');
+        } else if (this.activity === 'paused') {
+            this.activity = 'idle';
+            this.setActivity('idle');
+        }
     }
 
     /**
@@ -245,6 +287,11 @@ class WebsocketClientApp {
     public async connect(): Promise<void> {
         try {
             const startTime = Date.now();
+            if (this.connectBtn) {
+                this.connectBtn.disabled = true;
+                this.connectBtn.textContent = 'Connecting…';
+            }
+            this.setLoading(true);
 
             //const transport = new DailyTransport();
             const PipecatConfig: PipecatClientOptions = {
@@ -254,18 +301,34 @@ class WebsocketClientApp {
                 callbacks: {
                     onConnected: () => {
                         this.updateStatus('Connected');
-                        if (this.connectBtn) this.connectBtn.disabled = true;
+                        if (this.connectBtn) {
+                            this.connectBtn.disabled = true;
+                            this.connectBtn.textContent = 'Connected';
+                        }
                         if (this.disconnectBtn) this.disconnectBtn.disabled = false;
                     },
                     onDisconnected: () => {
                         this.updateStatus('Disconnected');
-                        if (this.connectBtn) this.connectBtn.disabled = false;
+                        if (this.connectBtn) {
+                            this.connectBtn.disabled = false;
+                            this.connectBtn.textContent = 'Connect';
+                        }
                         if (this.disconnectBtn) this.disconnectBtn.disabled = true;
                         this.setPaused(false);
                         if (this.pauseBtn) this.pauseBtn.disabled = true;
                         this.slide = null;
+                        this.jumpPending = false;
+                        this.setLoading(false);
+                        this.setActivity('idle');
                         this.updateNavButtons();
                         this.log('Client disconnected');
+                    },
+                    onBotLlmStarted: () => this.setActivity('thinking'),
+                    onBotStartedSpeaking: () => this.setActivity('speaking'),
+                    onBotStoppedSpeaking: () => this.setActivity('idle'),
+                    onUserStartedSpeaking: () => this.setActivity('listening'),
+                    onUserStoppedSpeaking: () => {
+                        if (this.activity === 'listening') this.setActivity('thinking');
                     },
                     onBotReady: (data) => {
                         this.log(`Bot ready: ${JSON.stringify(data)}`);
@@ -302,6 +365,11 @@ class WebsocketClientApp {
         } catch (error) {
             this.log(`Error connecting: ${(error as Error).message}`);
             this.updateStatus('Error');
+            this.setLoading(false);
+            if (this.connectBtn) {
+                this.connectBtn.disabled = false;
+                this.connectBtn.textContent = 'Retry';
+            }
             // Clean up if there's an error
             if (this.pcClient) {
                 try {
